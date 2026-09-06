@@ -1,0 +1,16 @@
+# FreeRADIUS 3.2 that reads radcheck/radreply/radacct + the `nas` table from the same PostgreSQL.
+# Build context = repo root (radnas/).
+FROM freeradius/freeradius-server:3.2.8-alpine
+
+USER root
+
+# rlm_sql_postgresql needs the PostgreSQL client library (libpq.so.5), absent from the base image
+RUN apk add --no-cache libpq
+
+# our SQL module config (DB credentials are injected from env at start)
+COPY deploy/docker/radius/mods-available/sql /etc/raddb/mods-available/sql
+COPY deploy/docker/radius/entrypoint.sh /rad-entrypoint.sh
+RUN chmod +x /rad-entrypoint.sh
+
+EXPOSE 1812/udp 1813/udp 3799/udp
+ENTRYPOINT ["/rad-entrypoint.sh"]

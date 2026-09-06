@@ -1,0 +1,12 @@
+-- One RADIUS client per address, enforced by the database.
+--
+-- FreeRADIUS is configured with `read_clients=yes client_table=nas`, so it builds its client list
+-- from this table keyed by address. Two rows sharing a nasname give it two different shared secrets
+-- for the same client: which one wins is undefined, and authentication starts failing or — worse —
+-- one tenant's router answers with another tenant's secret. That is exactly the mix-up that
+-- prompted this: a second admin was given the same IP and the panel started attributing sessions
+-- to the wrong company.
+--
+-- Guarded rather than blind: if duplicates already exist the index creation fails loudly instead of
+-- silently dropping data, and they must be resolved by hand first.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_nas_nasname_unique ON nas (nasname);

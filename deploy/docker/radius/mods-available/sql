@@ -1,0 +1,50 @@
+# RadNas SQL module — mirrors the stock FreeRADIUS 3.2 sql config (all table-name vars that
+# queries.conf needs) pointed at PostgreSQL. Placeholders (__SQL_*__) are substituted from env
+# by the container entrypoint.
+sql {
+    dialect = "postgresql"
+    driver  = "rlm_sql_${dialect}"
+
+    postgresql {
+        send_application_name = yes
+    }
+
+    # ── connection ──
+    server    = "__SQL_HOST__"
+    port      = __SQL_PORT__
+    login     = "__SQL_USER__"
+    password  = "__SQL_PASSWORD__"
+    radius_db = "__SQL_DB__"
+
+    # ── table names referenced by queries.conf (must live at the sql{} top level) ──
+    acct_table1      = "radacct"
+    acct_table2      = "radacct"
+    postauth_table   = "radpostauth"
+    authcheck_table  = "radcheck"
+    groupcheck_table = "radgroupcheck"
+    authreply_table  = "radreply"
+    groupreply_table = "radgroupreply"
+    usergroup_table  = "radusergroup"
+    delete_stale_sessions = yes
+
+    # ── NAS/clients from the app-managed `nas` table ──
+    read_clients = yes
+    client_table = "nas"
+
+    group_attribute = "SQL-Group"
+
+    pool {
+        start        = 3
+        min          = 2
+        max          = 16
+        spare        = 4
+        uses         = 0
+        retry_delay  = 30
+        lifetime     = 0
+        idle_timeout = 60
+        max_retries  = 5
+    }
+
+    # standard schema queries (radcheck / radreply / radgroup* / radacct / radpostauth)
+    $INCLUDE ${modconfdir}/${.:name}/main/${dialect}/queries.conf
+}

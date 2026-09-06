@@ -1,0 +1,70 @@
+# RadNas tenant stack — app in containers, DATABASE OUTSIDE Docker.
+# Postgres runs on the host (or a dedicated DB server); the containers connect to it.
+# Each tenant = its own DATABASE (+ user) on that shared/managed Postgres, plus its own
+# app+radius containers:
+#   docker compose -p acme --env-file acme.env up -d
+#
+# Requirements on the external Postgres (see README):
+#   - listens on an address the containers can reach (host-gateway / server IP)
+#   - pg_hba.conf allows the Docker subnet (e.g. 172.16.0.0/12) with scram-sha-256
+#   - the per-tenant DATABASE + role already created (migrations create the schema)
+
+name: radnas
+
+services:
+  backend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.backend
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach a Postgres running on the Docker host
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      DATABASE_URL: postgres://${DB_USER:-radnas}:${DB_PASSWORD}@${DB_HOST:-host.docker.internal}:${DB_PORT:-5432}/${DB_NAME:-radnas}
+      PGHOST: ${DB_HOST:-host.docker.internal}
+      PGPORT: ${DB_PORT:-5432}
+      PGUSER: ${DB_USER:-radnas}
+      PGPASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in the env file}
+      PGDATABASE: ${DB_NAME:-radnas}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in the env file}
+      CORS_ORIGIN: ${APP_URL:-http://localhost:8080}
+    expose:
+      - "4000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(4000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.web
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${WEB_PORT:-8080}:80"
+
+  radius:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.radius
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      backend:
+        condition: service_healthy   # wait until migrations created radcheck/radacct/nas
+    environment:
+      SQL_HOST: ${DB_HOST:-host.docker.internal}
+      SQL_PORT: ${DB_PORT:-5432}
+      SQL_USER: ${DB_USER:-radnas}
+      SQL_PASSWORD: ${DB_PASSWORD}
+      SQL_DB: ${DB_NAME:-radnas}
+    ports:
+      - "${RADIUS_AUTH_PORT:-1812}:1812/udp"
+      - "${RADIUS_ACCT_PORT:-1813}:1813/udp"
+      - "${RADIUS_COA_PORT:-3799}:3799/udp"

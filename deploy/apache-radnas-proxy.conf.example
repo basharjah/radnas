@@ -1,0 +1,35 @@
+# ============================================================================
+# RadNas — Apache reverse-proxy + SPA hosting (for SPanel's Apache/httpd)
+#
+# Place these directives inside your domain's <VirtualHost> in SPanel
+# (SPanel → your domain → "Apache custom configuration"), OR we add them over
+# SSH into the vhost include. SPanel issues the HTTPS certificate for the domain.
+#
+# Requires mod_proxy, mod_proxy_http, mod_rewrite (all standard on SPanel Apache).
+# SELinux: server-setup.sh already ran `setsebool -P httpd_can_network_connect 1`.
+# ============================================================================
+
+# ---- serve the built SPA ----
+DocumentRoot /home/radnas/app/frontend/dist
+
+<Directory /home/radnas/app/frontend/dist>
+    Options -Indexes +FollowSymLinks
+    AllowOverride All
+    Require all granted
+
+    # client-side routing: send unknown paths to index.html
+    RewriteEngine On
+    RewriteBase /
+    RewriteRule ^index\.html$ - [L]
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} !^/api/
+    RewriteRule . /index.html [L]
+</Directory>
+
+# ---- proxy the API to the Node backend (pm2, 127.0.0.1:4000) ----
+ProxyPreserveHost On
+ProxyPass        /api  http://127.0.0.1:4000/api
+ProxyPassReverse /api  http://127.0.0.1:4000/api
+
+# (Optional) if the subscriber portal or websockets are added later, proxy them here too.

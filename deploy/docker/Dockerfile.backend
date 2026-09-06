@@ -1,0 +1,22 @@
+# RadNas backend (Fastify + tsx). Build context = repo root (radnas/).
+FROM node:20-alpine
+
+WORKDIR /app
+
+# postgresql-client → pg_isready + the "already seeded?" check in the entrypoint; tini = clean PID 1
+RUN apk add --no-cache postgresql-client tini
+
+# install deps first (better layer caching). tsx is a devDependency and needed at runtime,
+# so install everything (do NOT prune dev).
+COPY backend/package*.json ./
+RUN npm ci
+
+# app source
+COPY backend/ ./
+
+# entrypoint: wait-for-db → migrate → seed-once → start
+COPY deploy/docker/entrypoint-backend.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 4000
+ENTRYPOINT ["/sbin/tini", "--", "/entrypoint.sh"]

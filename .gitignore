@@ -1,0 +1,47 @@
+# dependencies
+node_modules/
+# build output
+dist/
+build/
+# env & secrets
+.env
+.env.local
+*.local
+# logs
+*.log
+npm-debug.log*
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── أسرار لا تُرفع أبداً ────────────────────────────────────────────────────
+# pass.txt كان مُدرَجاً في الفهرس فعلاً قبل أول التزام — أُخرج، وهذا يمنع عودته.
+pass.txt
+*.key
+*.pem
+id_rsa*
+id_ed25519*
+*.ppk
+# ملفات البيئة كلها ما عدا النموذج، فالنموذج هو التوثيق
+.env.*
+!.env.example
+!*.env.example
+
+# ── مخرجات لا معنى لرفعها ──────────────────────────────────────────────────
+*.apk
+*.aab
+.dart_tool/
+.flutter-plugins*
+mobile/build/
+mobile/.dart_tool/
+*.tar.gz
+*.zip
+*.bak
+*.bak.*
+
+# ── نسخ احتياطية ومخرجات تشغيل ─────────────────────────────────────────────
+backups/
+*.sql.gz
+*.dump
