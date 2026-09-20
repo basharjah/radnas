@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../core/loader.dart';
+import '../core/format.dart';
 import '../core/theme.dart';
 
 /// Sell a subscriber extra data when they have burned through their bundle.
@@ -154,20 +155,36 @@ class _TopupSheetState extends State<_TopupSheet> {
   }
 }
 
-/// The badge and button a subscriber over quota gets, and nobody else does.
+/// The "sell this subscriber more data" button.
+///
+/// Shown to anyone on a metered plan, which is the panel's rule: the operator sells gigabytes
+/// BEFORE the customer runs out as often as after, and a customer who phones at 90% of their
+/// bundle should not have to be cut off first so that the button appears.
+///
+/// It used to appear only once the server had flagged the subscriber as throttled or blocked.
+/// That was wrong twice over: it hid the action during the very conversation in which it is sold,
+/// and for plans whose overage behaviour is "disconnect" those flags were never set at all, so
+/// the button was invisible for good.
 class TopupAction extends StatelessWidget {
   final Map<String, dynamic> row;
   final Future<void> Function() onDone;
   const TopupAction({super.key, required this.row, required this.onDone});
 
-  /// True when the server says this subscriber is throttled or blocked for quota.
+  /// True when this subscriber's plan meters data at all — the only case where extra GB mean
+  /// anything. On an unlimited plan there is nothing to top up.
   static bool needed(Map<String, dynamic> row) =>
-      row['fup_active'] == true || row['quota_locked'] == true;
+      (numOf(row['monthly_quota_mb']) ?? 0) > 0 ||
+      (numOf(row['daily_quota_mb']) ?? 0) > 0 ||
+      row['fup_active'] == true ||
+      row['quota_locked'] == true;
 
   @override
   Widget build(BuildContext context) {
     if (!needed(row)) return const SizedBox.shrink();
     final blocked = row['quota_locked'] == true;
+    final throttled = row['fup_active'] == true;
+    // Urgent while they are cut off or slowed, ordinary otherwise — the button says which.
+    final tone = blocked ? C.danger : (throttled ? C.warning : C.electric);
 
     return OutlinedButton.icon(
       onPressed: () async {
@@ -180,10 +197,14 @@ class TopupAction extends StatelessWidget {
         if (done) await onDone();
       },
       icon: const Icon(Icons.add_circle_outline),
-      label: Text(blocked ? 'شحن بيانات — محظور' : 'شحن بيانات — مخفّض السرعة'),
+      label: Text(blocked
+          ? 'شحن بيانات — محظور'
+          : throttled
+              ? 'شحن بيانات — مخفّض السرعة'
+              : 'شحن بيانات إضافية'),
       style: OutlinedButton.styleFrom(
-        foregroundColor: blocked ? C.danger : C.warning,
-        side: BorderSide(color: (blocked ? C.danger : C.warning).withValues(alpha: 0.5)),
+        foregroundColor: tone,
+        side: BorderSide(color: tone.withValues(alpha: 0.5)),
       ),
     );
   }

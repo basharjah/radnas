@@ -153,6 +153,10 @@ async function renewSubscriber(
        bonus_quota_mb = 0,
        quota_locked   = false,
        fup_active     = false,
+       -- A renewal starts a fresh allowance: the monthly quota is measured from this moment, not
+       -- from the first of the calendar month. Clearing fup_active alone was not enough - the
+       -- scheduler recomputes usage every few minutes and would put the throttle straight back.
+       period_start_at = now(),
        expiry_at      = (CASE WHEN status = 'active' AND expiry_at > now() THEN expiry_at ELSE now() END)
                        + (($2::int * $4::int) * (CASE $3::text
                             WHEN 'hours'  THEN interval '1 hour'
@@ -516,6 +520,32 @@ export const subscriberRoutes: FastifyPluginAsync = async (app) => {
       if ((e as { code?: string }).code === '23505') return reply.code(409).send({ error: 'username_taken' })
       throw e
     }
+  })
+
+  // The subscriber's own PPPoE credentials, for handing back to the subscriber.
+  //
+  // Deliberately its own endpoint rather than a column on the list: the list is 400 rows wide and
+  // ends up in logs, caches and screenshots, and a password belongs in none of those. Here one row
+  // is read, by an operator who already owns it, and the read is written to the audit trail — so
+  // "who looked up this password" has an answer.
+  //
+  // The password is stored in the clear because RADIUS Cleartext-Password requires it; that is a
+  // property of PPPoE, not a choice this endpoint makes.
+  app.get('/:id/credentials', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const row = await query<{ username: string; password: string; manager_id: string; full_name: string | null }>(
+      'SELECT username, password, manager_id, full_name FROM subscribers WHERE id = $1', [id],
+    )
+    if (!row.rowCount) return reply.code(404).send({ error: 'not_found' })
+    const scope = await managerScope(req.user.sub, (req.user as { role?: string }).role)
+    // Same answer as a missing row: a caller must not learn that an id outside its scope exists.
+    if (!scopeAllows(scope, row.rows[0]!.manager_id)) return reply.code(404).send({ error: 'not_found' })
+    const r = row.rows[0]!
+    await audit({
+      performedBy: req.user.sub, performedByName: req.user.username, action: 'subscriber.credentials_read',
+      targetType: 'subscriber', targetId: r.username, ip: req.ip,
+    })
+    return { username: r.username, password: r.password, full_name: r.full_name }
   })
 
   // Delete handler registered for both DELETE and POST /:id/delete (managed host blocks DELETE).

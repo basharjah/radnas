@@ -4,6 +4,8 @@ import '../core/theme.dart';
 import 'account_screens.dart';
 import 'invoices_screen.dart';
 import 'managers_screen.dart';
+import 'map_screen.dart';
+import 'monitor_screen.dart';
 import 'nas_screen.dart';
 import 'plans_screen.dart';
 import 'shell.dart';
@@ -37,6 +39,16 @@ class MoreScreen extends StatelessWidget {
         _Item('التقارير', Icons.bar_chart_outlined, (_) => const ReportsScreen()),
       ],
       'الشبكة': [
+        // First in its group: "is my network up" outranks "let me edit a device" on the day it
+        // matters, and this is the screen an operator opens when a customer says it is down.
+        // Icons.speed rather than a monitor glyph on purpose: every icon the app draws has to
+        // exist in the tree-shaken font already shipped, or the change stops being a code-only
+        // patch and needs a whole new APK. A gauge says "monitoring" just as well.
+        _Item('مراقبة الشبكة', Icons.speed, (_) => const MonitorScreen()),
+        // Icons.lan_outlined, not a map or share glyph: it is already in the shipped icon font
+        // (the plan and subscriber forms use it), so the whole map feature reaches phones as a
+        // code patch. A prettier icon would have cost every user a 60 MB reinstall.
+        _Item('خريطة الشبكة', Icons.lan_outlined, (_) => const MapScreen()),
         if (isAdminUp)
           _Item('أجهزة NAS', Icons.router_outlined, (_) => const NasScreen()),
         if (isOwner)
@@ -126,10 +138,12 @@ class MoreScreen extends StatelessWidget {
                     ],
                   ),
                 ),
+                // Not a logout button any more: the same tap now opens the accounts on this
+                // device, with signing out as one of the choices inside.
                 IconButton(
                   onPressed: () => confirmLogout(context),
-                  icon: const Icon(Icons.logout, color: C.danger),
-                  tooltip: 'تسجيل الخروج',
+                  icon: const Icon(Icons.switch_account_outlined, color: C.indigo),
+                  tooltip: 'الحسابات وتسجيل الخروج',
                 ),
               ]),
             ),

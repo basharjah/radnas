@@ -10,13 +10,37 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // The 401 handler lives here rather than in a screen: a token can expire during any request, and
   // signing out through the shared Auth object lets whichever screen is open react on its own.
-  Api.instance.onUnauthorized = () => Auth.instance.logout();
+  Api.instance.onUnauthorized = Auth.instance.onTokenRejected;
   await Auth.instance.restore();
   runApp(const RadNasApp());
 }
 
-class RadNasApp extends StatelessWidget {
+class RadNasApp extends StatefulWidget {
   const RadNasApp({super.key});
+  @override
+  State<RadNasApp> createState() => _RadNasAppState();
+}
+
+class _RadNasAppState extends State<RadNasApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// A phone that is used daily should never ask for a password again. Coming back to the
+  /// foreground is the moment to push the session out, since it is the moment we know the app is
+  /// in use and the network is likely up.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) Auth.instance.renewIfStale();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -43,8 +67,17 @@ class RadNasApp extends StatelessWidget {
           ),
           home: Auth.instance.restoring
               ? const _Splash()
+              // Keyed by WHO is signed in. The four tabs are kept alive on purpose so a tab switch
+              // does not lose the operator's place in a list of four hundred — but that same
+              // longevity meant switching company carried the previous one's subscribers, dashboard
+              // and sessions across, until every page was pulled to refresh by hand.
+              //
+              // Changing the key makes Flutter discard this Shell and every screen beneath it and
+              // build them again, so each one fetches under the new token. It is the whole fix:
+              // there is no list of screens to remember to reset, and one added tomorrow is covered
+              // the day it is written.
               : Auth.instance.signedIn
-                  ? const Shell()
+                  ? Shell(key: ValueKey(Auth.instance.user!.id))
                   : const LoginScreen(),
         );
       },

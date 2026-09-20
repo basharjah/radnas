@@ -3,8 +3,15 @@ import '../core/auth.dart';
 import '../core/theme.dart';
 import '../widgets/logo.dart';
 
+/// The sign-in screen, in two roles.
+///
+/// As the app's front door it stands alone. Reached from the account sheet (`asSwitch`) it is a
+/// page on top of a running app instead: it gets a back button, and it closes itself once the new
+/// account is in — the widget tree behind it already rebuilds around whoever is signed in.
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  final String? prefill;
+  final bool asSwitch;
+  const LoginScreen({super.key, this.prefill, this.asSwitch = false});
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
@@ -15,6 +22,14 @@ class _LoginScreenState extends State<LoginScreen> {
   final _form = GlobalKey<FormState>();
   bool _busy = false, _hide = true;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // A remembered account arrives with its username already known, so the only thing asked for is
+    // the thing that is actually missing.
+    if (widget.prefill != null) _user.text = widget.prefill!;
+  }
 
   @override
   void dispose() {
@@ -35,12 +50,31 @@ class _LoginScreenState extends State<LoginScreen> {
       _busy = false;
       _error = err;
     });
+    if (err == null && widget.asSwitch && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
+    // Accounts already on the device, minus the one being signed into and the one already active:
+    // offering either would be a row that does nothing.
+    final others = widget.asSwitch
+        ? const <SavedAccount>[]
+        : Auth.instance.accounts
+            .where((a) => a.username != _user.text.trim())
+            .take(4)
+            .toList();
+
     return Scaffold(
+      appBar: widget.asSwitch
+          ? AppBar(
+              backgroundColor: Colors.transparent,
+              surfaceTintColor: Colors.transparent,
+              title: Text(widget.prefill != null ? 'تسجيل الدخول' : 'إضافة حساب'),
+            )
+          : null,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -105,6 +139,50 @@ class _LoginScreenState extends State<LoginScreen> {
                                 style: const TextStyle(color: C.danger, fontSize: 14, height: 1.6)),
                           ),
                         ]),
+                      ),
+                    ],
+                    // The names this phone has signed in with before. One tap fills the username;
+                    // it never fills a password, so nothing is signed into by accident.
+                    if (others.isNotEmpty) ...[
+                      const SizedBox(height: 18),
+                      Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: Text('حسابات على هذا الجهاز',
+                            style: TextStyle(
+                                fontSize: 12.5, color: dark ? C.mutedD : C.muted)),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final a in others)
+                            ActionChip(
+                              avatar: Icon(
+                                a.ready ? Icons.check_circle_outline : Icons.person_outline,
+                                size: 17,
+                                color: a.ready ? C.success : (dark ? C.mutedD : C.muted),
+                              ),
+                              label: Text(a.display),
+                              onPressed: () async {
+                                if (a.ready) {
+                                  // Its token is still good — no password needed at all.
+                                  setState(() => _busy = true);
+                                  final err = await Auth.instance.switchTo(a);
+                                  if (!mounted) return;
+                                  setState(() {
+                                    _busy = false;
+                                    _error = err;
+                                  });
+                                  if (err != null) {
+                                    setState(() => _user.text = a.username);
+                                  }
+                                } else {
+                                  setState(() => _user.text = a.username);
+                                }
+                              },
+                            ),
+                        ],
                       ),
                     ],
                     const SizedBox(height: 22),

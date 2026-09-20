@@ -74,7 +74,8 @@ class _SubscriberDetailScreenState extends State<SubscriberDetailScreen> {
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('تجديد الاشتراك'),
-        content: Text('سيُجدَّد اشتراك ${row['username']} وتُخصم قيمة الباقة من رصيدك.'),
+        content: Text('سيُمدَّد اشتراك ${row['username']} بمقدار مدّة الباقة، '
+            'ويُفعَّل إن كان موقوفاً. التجديد المبكّر يحافظ على الوقت المتبقّي.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('إلغاء')),
           FilledButton(
@@ -99,6 +100,54 @@ class _SubscriberDetailScreenState extends State<SubscriberDetailScreen> {
       } else {
         _toast(Api.errorOf(res), ok: false);
       }
+    } on DioException catch (e) {
+      _toast(Api.errorOf(e.response, e), ok: false);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Bar the subscriber, or let them back in - the panel's cut / reconnect.
+  ///
+  /// RADIUS refuses the next authentication once the status is 'disabled', which is what actually
+  /// keeps them off the line. Ending the session alone does not: the router redials.
+  Future<void> _setStatus(String status) async {
+    final cutting = status == 'disabled';
+    if (cutting) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('قطع الاتصال'),
+          content: Text('سيُقطع اتصال ${row['username']} فوراً ويُمنع من الاتصال '
+              'حتى تُعيد تفعيله بزرّ «اتصال».'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('إلغاء')),
+            FilledButton(
+              onPressed: () => Navigator.pop(c, true),
+              style: FilledButton.styleFrom(
+                  backgroundColor: C.danger, minimumSize: const Size(96, 42)),
+              child: const Text('قطع الاتصال'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      final res = await Api.instance.dio
+          .put('/subscribers/${row['id']}', data: {'status': status});
+      if (!mounted) return;
+      final ok = res.statusCode != null && res.statusCode! < 300;
+      if (ok) {
+        _changed = true;
+        await _refreshRow();
+      }
+      _toast(
+        ok ? (cutting ? 'تم قطع الاتصال' : 'تمت إعادة الاتصال') : Api.errorOf(res),
+        ok: ok,
+      );
     } on DioException catch (e) {
       _toast(Api.errorOf(e.response, e), ok: false);
     } finally {
@@ -282,10 +331,24 @@ class _SubscriberDetailScreenState extends State<SubscriberDetailScreen> {
               label: const Text('تجديد الاشتراك'),
             ),
             const SizedBox(height: 10),
+            // The one that keeps them off: it survives the redial.
+            OutlinedButton.icon(
+              onPressed: _busy
+                  ? null
+                  : () => _setStatus(status == 'disabled' ? 'active' : 'disabled'),
+              icon: Icon(status == 'disabled' ? Icons.power_settings_new : Icons.block),
+              label: Text(status == 'disabled' ? 'إعادة الاتصال' : 'قطع الاتصال'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: status == 'disabled' ? C.success : C.danger,
+              ),
+            ),
+            const SizedBox(height: 10),
+            // And the one that only ends the open session, so a changed speed or quota applies now
+            // instead of at the next natural reconnect.
             OutlinedButton.icon(
               onPressed: _busy || !online ? null : _disconnect,
               icon: const Icon(Icons.link_off),
-              label: Text(online ? 'قطع الجلسة الحالية' : 'لا جلسة لقطعها'),
+              label: Text(online ? 'إنهاء الجلسة الحالية' : 'لا جلسة لقطعها'),
             ),
           ],
         ),

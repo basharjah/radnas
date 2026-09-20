@@ -6,6 +6,19 @@ import { authenticate } from '../plugins/auth'
 import { audit } from '../lib/audit'
 import { notify } from '../lib/notify'
 
+/**
+ * How long a session lasts, by where it is being held.
+ *
+ * A browser is often a shared or public machine, so its session stays short. A phone is one
+ * person's, locked, and the token sits in the platform keystore - and an operator who has to
+ * retype an admin password every week on a phone keyboard will pick a weaker one. The app also
+ * renews on every launch (see /refresh), so thirty days is really "thirty days without opening
+ * the app at all", not a fixed expiry.
+ *
+ * The web never sends `device`, so nothing about the panel's session changes.
+ */
+const sessionFor = (device: unknown): string => (device === 'mobile' ? '30d' : '7d')
+
 const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
@@ -59,7 +72,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(403).send({ error: 'account_disabled', message: 'هذا الحساب معطّل. راجع الإدارة.' })
     }
 
-    const token = app.jwt.sign({ sub: m.id, username: m.username, role: m.role }, { expiresIn: '7d' })
+    const token = app.jwt.sign(
+      { sub: m.id, username: m.username, role: m.role },
+      { expiresIn: sessionFor((req.body as { device?: unknown } | undefined)?.device) },
+    )
     await audit({ performedBy: m.id, performedByName: m.username, action: 'auth.login', ip: req.ip })
     return { token, user: { id: m.id, username: m.username, full_name: m.full_name, role: m.role } }
   })
@@ -113,6 +129,31 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         price: typeof prices[String(t)] === 'number' ? prices[String(t)] : null,
       })),
     }
+  })
+
+  /**
+   * Trade a still-valid token for a fresh one, so an app in daily use never expires.
+   *
+   * This is what makes "signed in until I sign out" true on a phone: the app calls it on launch,
+   * and the clock restarts. It is not a way back in from an expired token - `authenticate` has
+   * already rejected those - and the account is re-checked here, so an operator whose company was
+   * disabled since login stops renewing rather than carrying a valid token for another month.
+   */
+  app.post('/refresh', { preHandler: authenticate }, async (req, reply) => {
+    const res = await query<ManagerRow>(
+      `SELECT id, username, password_hash, full_name, role, status FROM managers WHERE id = $1`,
+      [req.user.sub],
+    )
+    const m = res.rows[0]
+    if (!m) return reply.code(401).send({ error: 'not_found' })
+    if (m.status !== 'active') {
+      return reply.code(403).send({ error: 'account_disabled', message: 'هذا الحساب معطّل. راجع الإدارة.' })
+    }
+    const token = app.jwt.sign(
+      { sub: m.id, username: m.username, role: m.role },
+      { expiresIn: sessionFor((req.body as { device?: unknown } | undefined)?.device) },
+    )
+    return { token, user: { id: m.id, username: m.username, full_name: m.full_name, role: m.role } }
   })
 
   app.get('/me', { preHandler: authenticate }, async (req) => {

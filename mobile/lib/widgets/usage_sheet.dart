@@ -1,9 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import '../core/api.dart';
-import '../core/format.dart';
 import '../core/theme.dart';
-import 'common.dart';
 import 'topup_sheet.dart';
 import 'usage_card.dart';
 
@@ -146,30 +144,9 @@ class _UsageSheetState extends State<_UsageSheet> {
                   ]),
                 )
               else ...[
+                // The card now carries the whole of the panel's modal — totals, sessions, and
+                // both quota bars — so the sheet no longer repeats a row of its own.
                 UsageCard(usage: _usage!, dark: dark),
-                const SizedBox(height: 12),
-                Row(children: [
-                  Expanded(
-                    child: StatTile(
-                      label: 'اليوم',
-                      value: fmtData(numOf(_usage!['daily_used_mb']) ?? 0),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: StatTile(
-                      label: 'هذا الشهر',
-                      value: fmtData(numOf(_usage!['monthly_used_mb']) ?? 0),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: StatTile(
-                      label: 'الجلسات',
-                      value: '${numOf(_usage!['sessions'])?.round() ?? 0}',
-                    ),
-                  ),
-                ]),
                 // The quota bar directly above has just shown them running out — this is where the
                 // operator is already looking when they decide to sell more.
                 if (_usage!['fup_active'] == true || _usage!['quota_locked'] == true) ...[

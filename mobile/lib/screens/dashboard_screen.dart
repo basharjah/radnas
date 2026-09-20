@@ -4,6 +4,7 @@ import '../core/format.dart';
 import '../core/api.dart';
 import '../core/auth.dart';
 import '../core/theme.dart';
+import '../widgets/bell.dart';
 import '../widgets/logo.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -64,6 +65,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: const BrandLogo(height: 30),
         centerTitle: false,
         actions: [
+          const BellButton(),
           IconButton(
             onPressed: _load,
             icon: const Icon(Icons.refresh),

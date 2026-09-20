@@ -24,6 +24,7 @@ import { reportRoutes } from './routes/reports'
 import { auditRoutes } from './routes/audit'
 import { settingsRoutes } from './routes/settings'
 import { telegramRoutes } from './routes/telegram'
+import { notificationRoutes } from './routes/notifications'
 import { portalRoutes } from './routes/portal'
 import { backupRoutes } from './routes/backups'
 import { onboardingRoutes } from './routes/onboarding'
@@ -32,6 +33,8 @@ import { startTrafficSampler } from './lib/trafficSampler'
 import { ensureAutomationSchema, startScheduler } from './lib/scheduler'
 import { initPush } from './lib/push'
 import { startRouterPoller } from './lib/routerPoller'
+import { startDeviceMonitor } from './lib/deviceMonitor'
+import { monitorRoutes } from './routes/monitor'
 
 async function buildServer() {
   const app = Fastify({
@@ -70,10 +73,12 @@ async function buildServer() {
   await app.register(auditRoutes, { prefix: '/api/audit' })
   await app.register(settingsRoutes, { prefix: '/api/settings' })
   await app.register(telegramRoutes, { prefix: '/api/telegram' })
+  await app.register(notificationRoutes, { prefix: '/api/notifications' })
   await app.register(portalRoutes, { prefix: '/api/portal' })
   await app.register(backupRoutes, { prefix: '/api/backups' })
   await app.register(onboardingRoutes, { prefix: '/api/onboarding' })
   await app.register(pushRoutes, { prefix: '/api/push' })
+  await app.register(monitorRoutes, { prefix: '/api/monitor' })
 
   return app
 }
@@ -89,6 +94,7 @@ app
     if (!initPush()) app.log.warn('push disabled — VAPID keys not set')
     startScheduler().catch((e) => app.log.error(e, 'scheduler failed to start'))
     startRouterPoller().catch((e) => app.log.error(e, 'router poller failed to start'))
+    startDeviceMonitor().catch((e) => app.log.error(e, 'device monitor failed to start'))
   })
   .catch((err) => {
     app.log.error(err)

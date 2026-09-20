@@ -69,6 +69,21 @@ export async function notify(input: NotifyInput): Promise<void> {
   let ids: string[] = []
   try {
     ids = await recipients(input.kind, input.managerId)
+
+    // Stored FIRST, before either transport. Push and Telegram are fire-and-forget: an operator
+    // whose phone was off simply never learned the event happened. The row survives that, and is
+    // what the panel's bell and the app's inbox both read.
+    //
+    // One row per recipient, inserted in a single statement rather than a loop, so a signup that
+    // reaches three accounts costs one round trip.
+    if (ids.length) {
+      await query(
+        `INSERT INTO notifications (manager_id, kind, title, body, url, subject_id)
+         SELECT id, $2, $3, $4, $5, $6 FROM unnest($1::uuid[]) AS t(id)`,
+        [ids, input.kind, input.title, input.body, input.url ?? null, input.managerId ?? null],
+      ).catch(() => { /* a lost row must never break the action that produced it */ })
+    }
+
     if (ids.length) {
       await pushToManagers(ids, {
         title: input.title,

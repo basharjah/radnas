@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../core/auth.dart';
 import '../core/theme.dart';
+import '../widgets/account_sheet.dart';
 import 'dashboard_screen.dart';
 import 'online_screen.dart';
 import 'more_screen.dart';
@@ -64,22 +64,7 @@ class _ShellState extends State<Shell> {
   }
 }
 
-/// Signs out after confirming — a mis-tap here means retyping credentials in the field.
-Future<void> confirmLogout(BuildContext context) async {
-  final ok = await showDialog<bool>(
-    context: context,
-    builder: (c) => AlertDialog(
-      title: const Text('تسجيل الخروج'),
-      content: const Text('ستحتاج إلى إدخال اسم المستخدم وكلمة المرور مرّة أخرى.'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('إلغاء')),
-        FilledButton(
-          onPressed: () => Navigator.pop(c, true),
-          style: FilledButton.styleFrom(backgroundColor: C.danger, minimumSize: const Size(96, 42)),
-          child: const Text('خروج'),
-        ),
-      ],
-    ),
-  );
-  if (ok == true) await Auth.instance.logout();
-}
+/// Signing out is now one entry in the accounts sheet rather than a button of its own: on a phone
+/// that holds two or three accounts, "leave this one" and "go to that one" are the same decision,
+/// and separating them is how an operator ends up signing out when they meant to switch.
+Future<void> confirmLogout(BuildContext context) => showAccountSheet(context);

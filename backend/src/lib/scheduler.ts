@@ -22,6 +22,12 @@ export async function ensureAutomationSchema(): Promise<void> {
   await query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS bonus_quota_mb bigint  NOT NULL DEFAULT 0`)
   await query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS bonus_expires_at timestamptz`)
   await query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS starts_at timestamptz`)
+  // When the subscriber's CURRENT paid period began. Set by every renewal; the monthly quota is
+  // measured from here rather than from the first of the calendar month.
+  //
+  // NULL means "never renewed through the panel", and those rows keep the old calendar-month
+  // behaviour — so switching this on changes nothing until a subscriber is actually renewed.
+  await query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS period_start_at timestamptz`)
 }
 
 /** Best-effort CoA Disconnect for a username via the first (or WireGuard-linked) NAS. Never throws. */
@@ -29,6 +35,24 @@ export async function ensureAutomationSchema(): Promise<void> {
 // Local timezone for the daily/monthly usage windows (daily resets at LOCAL midnight, e.g. 12am
 // Damascus, not UTC). Override per deployment via USAGE_TZ.
 const USAGE_TZ = process.env.USAGE_TZ || 'Asia/Damascus'
+
+/**
+ * Where each usage window begins, as SQL. $1 is always USAGE_TZ.
+ *
+ * The day is everyone's local midnight. The month is the subscriber's own subscription period —
+ * it starts when they were last renewed, and only falls back to the calendar month for a row that
+ * has never been renewed through the panel.
+ *
+ * Two spellings of the month expression exist because the two queries alias the subscribers table
+ * differently: `s` in captureMarks, `s2` in refreshUsage. They must stay identical apart from the
+ * alias, or a mark would be written under one period_start and looked up under another — and the
+ * baseline would silently never match.
+ */
+const DAY_START = `date_trunc('day', now() AT TIME ZONE $1) AT TIME ZONE $1`
+const monthStart = (alias: string) =>
+  `COALESCE(${alias}.period_start_at, date_trunc('month', now() AT TIME ZONE $1) AT TIME ZONE $1)`
+const MONTH_START_S = monthStart('s')
+const MONTH_START_S2 = monthStart('s2')
 
 /** Recompute daily/monthly usage (MB) for every subscriber from radacct, bucketed by LOCAL day/month. */
 /**
@@ -39,36 +63,65 @@ const USAGE_TZ = process.env.USAGE_TZ || 'Asia/Damascus'
  * during this period counts. Accuracy at the boundary is bounded by the scheduler interval.
  */
 async function captureMarks(): Promise<void> {
-  for (const period of ['day', 'month'] as const) {
-    await query(
-      `INSERT INTO session_period_marks (acctuniqueid, period, period_start, base_bytes)
-       SELECT r.acctuniqueid, $2,
-              date_trunc($2, now() AT TIME ZONE $1) AT TIME ZONE $1,
-              CASE WHEN r.acctstarttime >= date_trunc($2, now() AT TIME ZONE $1) AT TIME ZONE $1
-                   THEN 0 ELSE r.acctinputoctets + r.acctoutputoctets END
-         FROM radacct r
-        WHERE r.acctstoptime IS NULL AND r.acctuniqueid IS NOT NULL
-       ON CONFLICT (acctuniqueid, period, period_start) DO NOTHING`,
-      [USAGE_TZ, period],
-    )
-  }
-  // Marks are only useful for the period they belong to; keep a short tail for auditing.
-  await query(`DELETE FROM session_period_marks WHERE period_start < now() - interval '40 days'`)
+  // The day window is the same for everyone: local midnight.
+  await query(
+    `INSERT INTO session_period_marks (acctuniqueid, period, period_start, base_bytes)
+     SELECT r.acctuniqueid, 'day', ${DAY_START},
+            CASE WHEN r.acctstarttime >= ${DAY_START}
+                 THEN 0 ELSE r.acctinputoctets + r.acctoutputoctets END
+       FROM radacct r
+      WHERE r.acctstoptime IS NULL AND r.acctuniqueid IS NOT NULL
+     ON CONFLICT (acctuniqueid, period, period_start) DO NOTHING`,
+    [USAGE_TZ],
+  )
+
+  // The month window is the subscriber's OWN: it begins the moment they were renewed.
+  //
+  // A session already running at that moment is marked at its current counters, so the renewal
+  // really does hand them a clean allowance rather than one the previous period had already
+  // spent. Without this, a mid-month renewal cleared fup_active and the very next tick put the
+  // throttle straight back — because the usage figure had not moved.
+  await query(
+    `INSERT INTO session_period_marks (acctuniqueid, period, period_start, base_bytes)
+     SELECT r.acctuniqueid, 'month', w.start_at,
+            CASE WHEN r.acctstarttime >= w.start_at THEN 0
+                 ELSE r.acctinputoctets + r.acctoutputoctets END
+       FROM radacct r
+       JOIN subscribers s ON s.username = r.username
+       CROSS JOIN LATERAL (SELECT ${MONTH_START_S} AS start_at) w
+      WHERE r.acctstoptime IS NULL AND r.acctuniqueid IS NOT NULL
+     ON CONFLICT (acctuniqueid, period, period_start) DO NOTHING`,
+    [USAGE_TZ],
+  )
+
+  // Prune old marks — but never one belonging to a session that is STILL OPEN, however old.
+  //
+  // A twelve-month renewal puts period_start a year in the past. The flat 40-day delete would
+  // have thrown away that period's baseline while the session it describes was still running,
+  // and the subscriber's usage would then be miscounted for the rest of their subscription.
+  await query(`
+    DELETE FROM session_period_marks m
+     WHERE m.period_start < now() - interval '40 days'
+       AND NOT EXISTS (
+         SELECT 1 FROM radacct r
+          WHERE r.acctuniqueid = m.acctuniqueid AND r.acctstoptime IS NULL)`)
 }
 
 async function refreshUsage(): Promise<void> {
   await captureMarks()
   // A session counts toward the period if it STARTED in it, or if it was marked while running in
   // it (i.e. it crossed the boundary). GREATEST(0,…) absorbs router counter resets.
-  const periodSum = (period: 'day' | 'month') => `
+  const periodSum = (period: 'day' | 'month') => {
+    const start = period === 'month' ? MONTH_START_S2 : DAY_START
+    return `
         (SELECT SUM(GREATEST(0, (r.acctinputoctets + r.acctoutputoctets) - COALESCE(m.base_bytes, 0)))
            FROM radacct r
            LEFT JOIN session_period_marks m
              ON m.acctuniqueid = r.acctuniqueid AND m.period = '${period}'
-            AND m.period_start = date_trunc('${period}', now() AT TIME ZONE $1) AT TIME ZONE $1
+            AND m.period_start = ${start}
           WHERE r.username = s2.username
-            AND (r.acctstarttime >= date_trunc('${period}', now() AT TIME ZONE $1) AT TIME ZONE $1
-                 OR m.acctuniqueid IS NOT NULL))`
+            AND (r.acctstarttime >= ${start} OR m.acctuniqueid IS NOT NULL))`
+  }
   await query(`
     UPDATE subscribers s SET
       daily_used_mb   = COALESCE(a.day_bytes, 0) / 1048576,
@@ -163,12 +216,19 @@ async function enforceQuota(): Promise<void> {
     const overDaily = effDaily > 0 && Number(r.daily_used_mb) >= effDaily
     const over = overMonthly || overDaily
 
-    if (r.fup_behavior === 'disconnect') {
-      if (over) await disconnectSubscriber(r.username, r.manager_id)
-      continue
-    }
-
-    const wantBlock = over && r.fup_behavior === 'block'
+    // 'disconnect' and 'block' mean the same thing to the network - stop serving this subscriber -
+    // and differ only in wording. So both must LOCK the account, not merely drop the session.
+    //
+    // Dropping the session alone achieved nothing: RADIUS still answered Access-Accept, the
+    // customer's router redialled within seconds, and the only effect was a line that blinked
+    // every few minutes while the internet kept working.
+    //
+    // The branch also returned before the UPDATE below, so quota_locked was never written. That is
+    // why no notification ever arrived, no audit line was recorded, and neither the panel nor the
+    // app could show that the quota had run out - and why the "sell more data" button, which keys
+    // off exactly those flags, never appeared for the subscribers who most needed it.
+    const bars = r.fup_behavior === 'block' || r.fup_behavior === 'disconnect'
+    const wantBlock = over && bars
     const wantFup = over && r.fup_behavior === 'throttle'
     if (Boolean(r.quota_locked) === wantBlock && Boolean(r.fup_active) === wantFup) continue
 

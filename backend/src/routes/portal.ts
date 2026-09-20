@@ -5,6 +5,9 @@ import { authenticateSubscriber } from '../plugins/auth'
 
 const loginSchema = z.object({ username: z.string().min(1), password: z.string().min(1) })
 
+/** Same rule as the panel: a phone's session is long and renewed on launch, a browser's is not. */
+const sessionFor = (device: unknown): string => (device === 'mobile' ? '30d' : '7d')
+
 interface SubAuth { id: string; username: string; password: string; status: string; full_name: string | null }
 
 export const portalRoutes: FastifyPluginAsync = async (app) => {
@@ -15,7 +18,28 @@ export const portalRoutes: FastifyPluginAsync = async (app) => {
     const r = await query<SubAuth>('SELECT id, username, password, status, full_name FROM subscribers WHERE username = $1', [username])
     const s = r.rows[0]
     if (!s || s.password !== password) return reply.code(401).send({ error: 'invalid_credentials' })
-    const token = app.jwt.sign({ sub: s.id, username: s.username, kind: 'subscriber' }, { expiresIn: '7d' })
+    const token = app.jwt.sign(
+      { sub: s.id, username: s.username, kind: 'subscriber' },
+      { expiresIn: sessionFor((req.body as { device?: unknown } | undefined)?.device) },
+    )
+    return { token, user: { username: s.username, full_name: s.full_name } }
+  })
+
+  /// Renew a live session, so the app stays signed in as long as it is being used.
+  ///
+  /// A subscriber who has since been deleted gets nothing back; one who has merely expired keeps
+  /// their session, because seeing *why* the line is off is exactly what they open the app for.
+  app.post('/refresh', { preHandler: authenticateSubscriber }, async (req, reply) => {
+    const r = await query<SubAuth>(
+      'SELECT id, username, password, status, full_name FROM subscribers WHERE id = $1',
+      [req.user.sub],
+    )
+    const s = r.rows[0]
+    if (!s) return reply.code(401).send({ error: 'not_found' })
+    const token = app.jwt.sign(
+      { sub: s.id, username: s.username, kind: 'subscriber' },
+      { expiresIn: sessionFor((req.body as { device?: unknown } | undefined)?.device) },
+    )
     return { token, user: { username: s.username, full_name: s.full_name } }
   })
 
