@@ -4,6 +4,7 @@ import { query } from '../db/pool'
 import { authenticate } from '../plugins/auth'
 import { audit } from '../lib/audit'
 import { syncSubscriberToRadius, removeSubscriberFromRadius } from '../lib/radius'
+import { liveSessionId } from '../lib/radiusOps'
 import { notify } from '../lib/notify'
 import { sendDisconnect } from '../lib/coa'
 import { managerScope, scopeAllows } from '../lib/scope'
@@ -67,7 +68,11 @@ async function disconnectUsername(username: string): Promise<void> {
     )
     const host = peer.rows[0]?.tunnel_ip || nas.nasname
     const nasIp = /^\d+\.\d+\.\d+\.\d+$/.test(nas.nasname) ? nas.nasname : undefined
-    await sendDisconnect({ host, secret: nas.secret, username, nasIp, retries: 1, timeoutMs: 800 })
+    // RouterOS matches the session by Acct-Session-Id; User-Name alone earns a Disconnect-NAK.
+    const acctSessionId = await liveSessionId(username)
+    await sendDisconnect({
+      host, secret: nas.secret, username, nasIp, acctSessionId, retries: 1, timeoutMs: 800,
+    })
   } catch {
     /* best-effort */
   }

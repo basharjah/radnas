@@ -4,6 +4,7 @@ import { query } from '../db/pool'
 import { authenticate } from '../plugins/auth'
 import { audit } from '../lib/audit'
 import { sendDisconnect, buildAttrList } from '../lib/coa'
+import { liveSessionId } from '../lib/radiusOps'
 import { managerScope, scopeAllows } from '../lib/scope'
 
 const schema = z.object({
@@ -36,11 +37,31 @@ export const coaRoutes: FastifyPluginAsync = async (app) => {
       if (!own.rowCount || !scopeAllows(scope, own.rows[0]!.manager_id)) return reply.code(404).send({ error: 'not_found' })
     }
 
+    // The router that actually holds this subscriber's session — resolved from the subscriber, not
+    // guessed.
+    //
+    // This used to fall back to `ORDER BY created_at LIMIT 1`: the OLDEST NAS in the whole table,
+    // belonging to whichever company was onboarded first. So every disconnect issued without an
+    // explicit nas_id was addressed to a stranger's router, which quite correctly answered
+    // Disconnect-NAK because the session was not its own. The panel reported the attempt and the
+    // customer stayed online.
+    //
+    // It was also a tenancy leak: one company's disconnect command, carrying one of its
+    // subscribers' usernames, was being delivered to another company's router.
     const nasRes = b.nas_id
       ? await query<NasRow>('SELECT id, nasname, shortname, secret FROM nas WHERE id = $1', [b.nas_id])
-      : await query<NasRow>('SELECT id, nasname, shortname, secret FROM nas ORDER BY created_at LIMIT 1')
+      : await query<NasRow>(
+          `SELECT n.id, n.nasname, n.shortname, n.secret
+             FROM nas n
+             JOIN subscribers s ON s.manager_id = n.manager_id
+            WHERE s.username = $1
+            ORDER BY n.created_at
+            LIMIT 1`,
+          [username],
+        )
     const nas = nasRes.rows[0]
-    if (!nas) return reply.code(400).send({ error: 'no_nas' })
+    // No router of their own is a real answer, not a reason to borrow someone else's.
+    if (!nas) return reply.code(400).send({ error: 'no_nas', message: 'لا راوتر مرتبط بشركة هذا المشترك' })
 
     // prefer the WireGuard tunnel IP of the peer linked to this NAS (real-world path)
     const peer = await query<{ tunnel_ip: string }>(
@@ -62,7 +83,13 @@ export const coaRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const result = await sendDisconnect({ host, secret: nas.secret, username, nasIp, retries: b.retries, timeoutMs: b.timeout_ms })
+    // Same identifier the router needs; without it this endpoint answered "sent" and changed
+    // nothing, which is how a disconnected subscriber stayed online for four days.
+    const acctSessionId = await liveSessionId(username)
+    const result = await sendDisconnect({
+      host, secret: nas.secret, username, nasIp, acctSessionId,
+      retries: b.retries, timeoutMs: b.timeout_ms,
+    })
     await audit({
       performedBy: req.user.sub, performedByName: req.user.username, action: 'coa.disconnect',
       targetType: 'subscriber', targetId: username, details: result.ok ? 'ACK' : (result.error ?? result.response ?? ''), ip: req.ip,
